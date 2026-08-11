@@ -1,13 +1,15 @@
 # .github/workflows/update-ipc.yml
-# Atualiza data/ipc-anual.json uma vez por ano, depois de o INE publicar
-# a inflacao media anual do ano anterior (destaque de meados de janeiro).
-# Corre a 20 de janeiro; o workflow_dispatch permite correr manualmente.
+# Atualiza data/ipc-anual.json todos os meses: o INE divulga o IPC do mes
+# anterior por volta do dia 10-12, por isso o workflow corre a dia 15.
+# Alem dos anos fechados (dezembro), grava o valor provisorio do ano corrente
+# (media dos ultimos 12 meses ate ao ultimo mes disponivel).
+# O workflow_dispatch permite correr manualmente.
 
-name: Atualizar IPC anual (INE)
+name: Atualizar IPC (INE)
 
 on:
   schedule:
-    - cron: "0 9 20 1 *"   # 20 de janeiro, 09:00 UTC
+    - cron: "0 9 15 * *"   # dia 15 de cada mes, 09:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -34,6 +36,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "Sem alteracoes."
           else
-            git commit -m "Atualiza IPC anual (INE) - $(date +%Y)"
+            git commit -m "Atualiza IPC (INE) - $(date +%Y-%m)"
             git push
           fi

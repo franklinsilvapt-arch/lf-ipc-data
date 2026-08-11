@@ -9,17 +9,15 @@ Fonte primaria: BPstat (Banco de Portugal), serie 5721550
 
 O valor de DEZEMBRO de cada ano desta serie corresponde exatamente a taxa de
 inflacao media anual publicada pelo INE (o BPstat republica a serie do INE,
-que continua a ser a fonte citada na pagina). Usa-se o BPstat porque a API e
-estavel e nao muda de codigos com o rebasing do IPC (Base 2025, etc.), ao
-contrario dos varcd da API do INE.
+que continua a ser a fonte citada na pagina).
 
-Alternativa direta ao INE (se preferires): API json_indicador
-  https://www.ine.pt/ine/json_indicador/pindica.jsp?op=2&varcd=<VARCD>&lang=PT
-  O <VARCD> do indicador "IPC - Taxa de variacao media anual" deve ser
-  confirmado em http://smi.ine.pt (os codigos mudaram com a Base 2025).
+Alem dos anos fechados, o script grava um valor PROVISORIO para o ano corrente:
+o ultimo mes disponivel da mesma serie (media dos ultimos 12 meses). Quando o
+valor de dezembro e publicado, o ano passa a definitivo e o campo "provisorio"
+desaparece automaticamente.
 
 Uso: python update_ipc.py
-Corre uma vez por ano via GitHub Actions (ver .github/workflows/update-ipc.yml).
+Corre mensalmente via GitHub Actions (ver .github/workflows/update-ipc.yml).
 """
 
 import json
@@ -40,15 +38,20 @@ def get_json(url: str):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def fetch_bpstat_december_values() -> dict:
-    """Devolve {ano: taxa} com o valor de dezembro de cada ano da serie 5721550."""
+def fetch_bpstat_values():
+    """Devolve (dados, provisorio):
+    - dados: {ano: taxa} com o valor de dezembro de cada ano (= media anual do INE)
+    - provisorio: (ano, mes, taxa) do ultimo mes disponivel do ano corrente,
+      ou None se dezembro desse ano ja tiver sido publicado."""
     meta_list = get_json(f"{BASE}/series/?series_ids={SERIES_ID}")
     if not meta_list:
         raise RuntimeError("BPstat: metadados da serie nao encontrados")
     dataset_id = meta_list[0]["dataset_id"]
+    domain_id = meta_list[0]["domain_ids"][0]
 
-    # Observacoes em JSON-stat
-    obs = get_json(f"{BASE}/datasets/{dataset_id}/series/{SERIES_ID}/observations/")
+    # Observacoes em JSON-stat 2.0. A serie e devolvida dentro do dataset do
+    # dominio; o endpoint /datasets/<id>/series/<id>/observations/ devolve 404.
+    obs = get_json(f"{BASE}/domains/{domain_id}/datasets/{dataset_id}/?series_ids={SERIES_ID}")
 
     # Encontrar a dimensao temporal (JSON-stat 2.0)
     dims = obs.get("dimension", {})
@@ -70,28 +73,43 @@ def fetch_bpstat_december_values() -> dict:
         values = {int(k): v for k, v in values.items()}
         values = [values.get(i) for i in range(max(values) + 1)]
 
-    dados = {}
+    mensal = {}  # {(ano, mes): taxa}
     for periodo, i in index.items():
         v = values[i] if i < len(values) else None
         if v is None:
             continue
         # periodos tipo "1999-12-31", "1999-12" ou "1999M12"
         p = str(periodo)
-        ano = p[:4]
-        mes = p[5:7] if len(p) >= 7 else ""
-        if not ano.isdigit():
+        ano_s = p[:4]
+        if not ano_s.isdigit():
             continue
-        if "12" in (mes, p[-2:]):  # dezembro
-            if int(ano) >= PRIMEIRO_ANO:
-                dados[ano] = round(float(v), 1)
+        mes_s = p[5:7] if len(p) >= 7 and p[5:7].isdigit() else p[-2:]
+        if not mes_s.isdigit():
+            continue
+        ano, mes = int(ano_s), int(mes_s)
+        if 1 <= mes <= 12 and ano >= PRIMEIRO_ANO:
+            mensal[(ano, mes)] = float(v)
+
+    if not mensal:
+        raise RuntimeError("BPstat: nenhum valor mensal encontrado - verificar formato da API")
+
+    dados = {str(a): round(v, 1) for (a, m), v in mensal.items() if m == 12}
     if not dados:
-        raise RuntimeError("BPstat: nenhum valor de dezembro encontrado - verificar formato da API")
-    return dados
+        raise RuntimeError("BPstat: nenhum valor de dezembro encontrado")
+
+    ano_corrente = datetime.date.today().year
+    provisorio = None
+    if str(ano_corrente) not in dados:
+        meses = sorted(m for (a, m) in mensal if a == ano_corrente)
+        if meses:
+            m = meses[-1]
+            provisorio = (ano_corrente, m, round(mensal[(ano_corrente, m)], 1))
+    return dados, provisorio
 
 
 def main() -> int:
     try:
-        novos = fetch_bpstat_december_values()
+        novos, prov = fetch_bpstat_values()
     except Exception as e:
         print(f"ERRO ao obter dados do BPstat: {e}", file=sys.stderr)
         return 1
@@ -110,10 +128,18 @@ def main() -> int:
         "atualizado": datetime.date.today().isoformat(),
         "dados": dados,
     }
+    if prov:
+        ano, mes, taxa = prov
+        payload["provisorio"] = {str(ano): taxa}
+        payload["provisorio_mes"] = f"{ano}-{mes:02d}"
+
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     ultimo = max(dados)
-    print(f"OK: {len(dados)} anos gravados em {OUT} (ultimo ano: {ultimo} = {dados[ultimo]}%)")
+    msg = f"OK: {len(dados)} anos fechados (ultimo: {ultimo} = {dados[ultimo]}%)"
+    if prov:
+        msg += f" | provisorio {prov[0]} = {prov[2]}% (ate {prov[0]}-{prov[1]:02d})"
+    print(msg)
     return 0
 
 

@@ -1,6 +1,6 @@
 {
   "indicador": "IPC - taxa de variacao media anual (%)",
-  "fonte": "INE - Instituto Nacional de Estatistica (serie encadeada base 2025; 1960-1998 via PORDATA/INE; atualizacao anual via BPstat serie 5721550)",
+  "fonte": "INE - Instituto Nacional de Estatistica (via BPstat, serie 5721550)",
   "atualizado": "2026-08-11",
   "dados": {
     "1960": 2.6,
@@ -69,5 +69,9 @@
     "2023": 4.3,
     "2024": 2.4,
     "2025": 2.3
-  }
+  },
+  "provisorio": {
+    "2026": 2.6
+  },
+  "provisorio_mes": "2026-06"
 }
